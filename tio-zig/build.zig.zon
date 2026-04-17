@@ -1,0 +1,7 @@
+.{
+    .name = "tio",
+    .version = "3.9.0",
+    .minimum_zig_version = "0.13.0",
+    .dependencies = .{},
+    .paths = .{""},
+}
