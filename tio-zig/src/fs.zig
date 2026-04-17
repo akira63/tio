@@ -36,9 +36,11 @@ pub fn readFileFmt(buf: []u8, comptime fmt: []const u8, args: anytype) isize {
 
 /// Returns the mtime of a path as seconds since the Unix epoch, or 0.0 on error.
 pub fn getCreationTime(path: []const u8) f64 {
-    const st = std.fs.cwd().statFile(path) catch return 0.0;
-    // Use mtime as a proxy for creation time
-    return @as(f64, @floatFromInt(st.mtime)) / std.time.ns_per_s;
+    const f = std.fs.openFileAbsolute(path, .{}) catch return 0.0;
+    defer f.close();
+    const st = f.stat() catch return 0.0;
+    // mtime is i128 nanoseconds
+    return @as(f64, @floatFromInt(st.mtime)) / @as(f64, std.time.ns_per_s);
 }
 
 /// Check whether `path` is a directory.
@@ -60,11 +62,11 @@ pub fn isSerialDevice(path: [:0]const u8) bool {
     if (st.mode & std.os.linux.S.IFMT != std.os.linux.S.IFCHR) return false;
 
     // Must be a tty
-    if (posix.isatty(fd) == false) return false;
+    if (!posix.isatty(fd)) return false;
 
     // Serial devices have no rows/columns (unlike ptys)
     if (builtin.os.tag == .linux) {
-        var ws: std.os.linux.winsize = undefined;
+        var ws: std.os.linux.winsize = std.mem.zeroes(std.os.linux.winsize);
         const rc = std.os.linux.ioctl(fd, std.os.linux.T.IOCGWINSZ, @intFromPtr(&ws));
         if (rc == 0 and ws.ws_row != 0 and ws.ws_col != 0) return false;
     }

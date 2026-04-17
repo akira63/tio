@@ -24,7 +24,7 @@ pub const Config = struct {
 const Profile = std.StringHashMap([]const u8);
 
 /// The parsed configuration.  Maps profile names to their key-value pairs.
-const ProfileMap = std.StringHashMap(Profile);
+pub const ProfileMap = std.StringHashMap(Profile);
 
 /// Loaded config state.
 var loaded_profiles: ?ProfileMap = null;
@@ -41,8 +41,9 @@ pub fn findConfigPath(allocator: std.mem.Allocator) ?[]const u8 {
 
     const xdg = std.process.getEnvVarOwned(allocator, "XDG_CONFIG_HOME") catch null;
     if (xdg) |base| {
+        defer allocator.free(base);
         const p = std.fmt.allocPrint(allocator, "{s}/tio/config", .{base}) catch return null;
-        if (std.fs.accessAbsolute(p, .{}) == .{}) return p;
+        if (fileExists(p)) return p;
         allocator.free(p);
     }
 
@@ -50,14 +51,19 @@ pub fn findConfigPath(allocator: std.mem.Allocator) ?[]const u8 {
     defer allocator.free(home);
 
     const xdg_default = std.fmt.allocPrint(allocator, "{s}/.config/tio/config", .{home}) catch return null;
-    if (std.fs.accessAbsolute(xdg_default, .{}) catch null != null) return xdg_default;
+    if (fileExists(xdg_default)) return xdg_default;
     allocator.free(xdg_default);
 
     const rc = std.fmt.allocPrint(allocator, "{s}/.tiorc", .{home}) catch return null;
-    if (std.fs.accessAbsolute(rc, .{}) catch null != null) return rc;
+    if (fileExists(rc)) return rc;
     allocator.free(rc);
 
     return null;
+}
+
+fn fileExists(path: []const u8) bool {
+    std.fs.accessAbsolute(path, .{}) catch return false;
+    return true;
 }
 
 /// Parse the configuration file at `path`.  All strings are allocated into

@@ -33,26 +33,28 @@ pub fn logOpen(
         else
             auto_connect_str;
 
-        // Timestamp component
-        const ts = timestamp: {
-            const sec = std.time.timestamp();
-            const ep = std.time.epoch.EpochSeconds{ .secs = @intCast(sec) };
-            const day = ep.getDaySeconds();
-            const yr = ep.getEpochDay().calculateYearDay();
-            var buf: [32]u8 = undefined;
-            const s = std.fmt.bufPrint(&buf, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
+        // Timestamp component – use a fixed buffer, then allocate the full name
+        const sec = std.time.timestamp();
+        const ep = std.time.epoch.EpochSeconds{ .secs = @intCast(sec) };
+        const day = ep.getDaySeconds();
+        const yr = ep.getEpochDay().calculateYearDay();
+        const md = yr.calculateMonthDay();
+
+        const auto = try std.fmt.allocPrint(
+            allocator,
+            "tio_{s}_{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}{d:0>2}{d:0>2}.log",
+            .{
+                base,
                 yr.year,
-                yr.calculateMonthDay().month.numeric(),
-                yr.calculateMonthDay().day_index + 1,
+                md.month.numeric(),
+                md.day_index + 1,
                 day.getHoursIntoDay(),
                 day.getMinutesIntoHour(),
                 day.getSecondsIntoMinute(),
-            }) catch "unknown";
-            break :timestamp s;
-        };
-
-        const auto = try std.fmt.allocPrint(allocator, "tio_{s}_{s}.log", .{ base, ts });
+            },
+        );
         if (log_directory) |dir| {
+            defer allocator.free(auto);
             break :blk try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, auto });
         }
         break :blk auto;

@@ -12,6 +12,9 @@
 const std = @import("std");
 const posix = std.posix;
 const builtin = @import("builtin");
+const c = @cImport({
+    @cInclude("termios.h"); // termios structs, constants, tcflush
+});
 
 const options   = @import("options.zig");
 const print     = @import("print.zig");
@@ -108,18 +111,17 @@ var device_name: []const u8 = "";
 /// Global reference to the parsed options, set once in main.
 var g_opts: *const options.Options = undefined;
 
-/// cfmakeraw implementation (not always available in Zig std).
+/// cfmakeraw implementation using C-imported termios constants.
 fn cfmakeraw(tios: *posix.termios) void {
-    tios.iflag &= ~@as(posix.tcflag_t,
-        posix.IGNBRK | posix.BRKINT | posix.PARMRK | posix.ISTRIP |
-        posix.INLCR  | posix.IGNCR  | posix.ICRNL  | posix.IXON);
-    tios.oflag &= ~@as(posix.tcflag_t, posix.OPOST);
-    tios.lflag &= ~@as(posix.tcflag_t,
-        posix.ECHO | posix.ECHONL | posix.ICANON | posix.ISIG | posix.IEXTEN);
-    tios.cflag &= ~@as(posix.tcflag_t, posix.CSIZE | posix.PARENB);
-    tios.cflag |= posix.CS8;
-    tios.cc[@intFromEnum(posix.V.TIME)] = 0;
-    tios.cc[@intFromEnum(posix.V.MIN)]  = 1;
+    const tcflag = posix.tcflag_t;
+    tios.iflag &= ~@as(tcflag, c.IGNBRK | c.BRKINT | c.PARMRK | c.ISTRIP |
+                                c.INLCR  | c.IGNCR  | c.ICRNL  | c.IXON);
+    tios.oflag &= ~@as(tcflag, c.OPOST);
+    tios.lflag &= ~@as(tcflag, c.ECHO | c.ECHONL | c.ICANON | c.ISIG | c.IEXTEN);
+    tios.cflag &= ~@as(tcflag, c.CSIZE | c.PARENB);
+    tios.cflag |= @as(tcflag, c.CS8);
+    tios.cc[c.VTIME] = 0;
+    tios.cc[c.VMIN]  = 1;
 }
 
 // ── Stdout / stdin configuration ──────────────────────────────────────────
@@ -129,10 +131,10 @@ pub fn stdoutConfigure(opts: *const options.Options) !void {
     var new = stdout_old;
     cfmakeraw(&new);
     if (!interactive_mode) {
-        new.lflag |= posix.ISIG; // Allow Ctrl-C when piping
+        new.lflag |= @as(posix.tcflag_t, c.ISIG); // Allow Ctrl-C when piping
     }
-    new.cc[@intFromEnum(posix.V.TIME)] = 0;
-    new.cc[@intFromEnum(posix.V.MIN)]  = 1;
+    new.cc[c.VTIME] = 0;
+    new.cc[c.VMIN]  = 1;
     try posix.tcsetattr(posix.STDOUT_FILENO, .NOW, &new);
     stdout_configured = true;
     if (opts.vt100) {
@@ -153,8 +155,8 @@ pub fn stdinConfigure() !void {
     stdin_old = try posix.tcgetattr(posix.STDIN_FILENO);
     var new = stdin_old;
     cfmakeraw(&new);
-    new.cc[@intFromEnum(posix.V.TIME)] = 0;
-    new.cc[@intFromEnum(posix.V.MIN)]  = 1;
+    new.cc[c.VTIME] = 0;
+    new.cc[c.VMIN]  = 1;
     try posix.tcsetattr(posix.STDIN_FILENO, .NOW, &new);
     stdin_configured = true;
 }
@@ -168,6 +170,7 @@ pub fn stdinRestore() void {
 
 pub fn ttyConfigure(opts: *const options.Options) !void {
     tio_new = std.mem.zeroes(posix.termios);
+    const tcflag = posix.tcflag_t;
 
     // Baud rate
     standard_baudrate = setspeed.isStandardBaudrate(opts.baudrate);
@@ -178,70 +181,70 @@ pub fn ttyConfigure(opts: *const options.Options) !void {
     }
 
     // Data bits
-    tio_new.cflag &= ~@as(posix.tcflag_t, posix.CSIZE);
+    tio_new.cflag &= ~@as(tcflag, c.CSIZE);
     tio_new.cflag |= switch (opts.databits) {
-        5 => posix.CS5,
-        6 => posix.CS6,
-        7 => posix.CS7,
-        8 => posix.CS8,
+        5 => @as(tcflag, c.CS5),
+        6 => @as(tcflag, c.CS6),
+        7 => @as(tcflag, c.CS7),
+        8 => @as(tcflag, c.CS8),
         else => return error.InvalidDatabits,
     };
 
     // Flow control
     switch (opts.flow) {
         .none => {
-            tio_new.cflag &= ~@as(posix.tcflag_t, posix.CRTSCTS);
-            tio_new.iflag &= ~@as(posix.tcflag_t, posix.IXON | posix.IXOFF | posix.IXANY);
+            tio_new.cflag &= ~@as(tcflag, c.CRTSCTS);
+            tio_new.iflag &= ~@as(tcflag, c.IXON | c.IXOFF | c.IXANY);
         },
         .hard => {
-            tio_new.cflag |= posix.CRTSCTS;
-            tio_new.iflag &= ~@as(posix.tcflag_t, posix.IXON | posix.IXOFF | posix.IXANY);
+            tio_new.cflag |= @as(tcflag, c.CRTSCTS);
+            tio_new.iflag &= ~@as(tcflag, c.IXON | c.IXOFF | c.IXANY);
         },
         .soft => {
-            tio_new.cflag &= ~@as(posix.tcflag_t, posix.CRTSCTS);
-            tio_new.iflag |= posix.IXON | posix.IXOFF;
+            tio_new.cflag &= ~@as(tcflag, c.CRTSCTS);
+            tio_new.iflag |= @as(tcflag, c.IXON | c.IXOFF);
         },
     }
 
     // Stop bits
     switch (opts.stopbits) {
-        1 => tio_new.cflag &= ~@as(posix.tcflag_t, posix.CSTOPB),
-        2 => tio_new.cflag |= posix.CSTOPB,
+        1 => tio_new.cflag &= ~@as(tcflag, c.CSTOPB),
+        2 => tio_new.cflag |= @as(tcflag, c.CSTOPB),
         else => return error.InvalidStopbits,
     }
 
     // Parity
     switch (opts.parity) {
-        .none => tio_new.cflag &= ~@as(posix.tcflag_t, posix.PARENB),
+        .none => tio_new.cflag &= ~@as(tcflag, c.PARENB),
         .odd  => {
-            tio_new.cflag |= posix.PARENB | posix.PARODD;
+            tio_new.cflag |= @as(tcflag, c.PARENB | c.PARODD);
         },
         .even => {
-            tio_new.cflag |= posix.PARENB;
-            tio_new.cflag &= ~@as(posix.tcflag_t, posix.PARODD);
+            tio_new.cflag |= @as(tcflag, c.PARENB);
+            tio_new.cflag &= ~@as(tcflag, c.PARODD);
         },
         .mark => {
-            tio_new.cflag |= posix.PARENB | posix.PARODD;
+            tio_new.cflag |= @as(tcflag, c.PARENB | c.PARODD);
             // CMSPAR is Linux-only
             if (builtin.os.tag == .linux) tio_new.cflag |= 0x40000000;
         },
         .space => {
-            tio_new.cflag |= posix.PARENB;
-            tio_new.cflag &= ~@as(posix.tcflag_t, posix.PARODD);
+            tio_new.cflag |= @as(tcflag, c.PARENB);
+            tio_new.cflag &= ~@as(tcflag, c.PARODD);
             if (builtin.os.tag == .linux) tio_new.cflag |= 0x40000000;
         },
     }
 
-    tio_new.cflag |= posix.CLOCAL | posix.CREAD;
+    tio_new.cflag |= @as(tcflag, c.CLOCAL | c.CREAD);
     tio_new.oflag = 0;
     tio_new.lflag = 0;
-    tio_new.cc[@intFromEnum(posix.V.TIME)] = 0;
-    tio_new.cc[@intFromEnum(posix.V.MIN)]  = 1;
+    tio_new.cc[c.VTIME] = 0;
+    tio_new.cc[c.VMIN]  = 1;
 
     // Input mappings (termios level)
-    if (opts.map_i_nl_cr) tio_new.iflag |= posix.INLCR;
-    if (opts.map_ign_cr)  tio_new.iflag |= posix.IGNCR;
-    if (opts.map_i_cr_nl) tio_new.iflag |= posix.ICRNL;
+    if (opts.map_i_nl_cr) tio_new.iflag |= @as(posix.tcflag_t, c.INLCR);
+    if (opts.map_ign_cr)  tio_new.iflag |= @as(posix.tcflag_t, c.IGNCR);
+    if (opts.map_i_cr_nl) tio_new.iflag |= @as(posix.tcflag_t, c.ICRNL);
 }
 
 pub fn ttyReconfigure(opts: *const options.Options) void {
@@ -371,22 +374,22 @@ fn setOutputMode(mode: options.OutputMode) void {
     printchar_mode = mode;
 }
 
-fn printChar(c: u8, opts: *const options.Options) void {
+fn printChar(ch: u8, opts: *const options.Options) void {
     switch (printchar_mode) {
-        .normal => print.printNormal(c),
-        .hex    => print.printHex(c),
+        .normal => print.printNormal(ch),
+        .hex    => print.printHex(ch),
     }
-    if (opts.log) log.logPutc(c, switch (printchar_mode) {
+    if (opts.log) log.logPutc(ch, switch (printchar_mode) {
         .normal => .normal,
         .hex    => .hex,
     }, opts.log_strip);
-    socket.socketWrite(c);
+    socket.socketWrite(ch);
 }
 
-fn handleHexPrompt(c: u8, opts: *const options.Options) void {
-    hex_chars[hex_char_index] = c;
+fn handleHexPrompt(ch: u8, opts: *const options.Options) void {
+    hex_chars[hex_char_index] = ch;
     hex_char_index += 1;
-    _ = posix.write(posix.STDOUT_FILENO, &[_]u8{c}) catch {};
+    _ = posix.write(posix.STDOUT_FILENO, &[_]u8{ch}) catch {};
     print.printTaintedSet();
 
     if (hex_char_index == 2) {
@@ -637,7 +640,7 @@ pub fn handleCommandSequence(
             KEY_SHIFT_F => {
                 // Flush I/O
                 tioPrint(opts, "Flushed data I/O buffers");
-                _ = std.c.tcflush(device_fd, TCIOFLUSH);
+                _ = c.tcflush(device_fd, @as(c_int, TCIOFLUSH));
             },
 
             KEY_G => {
@@ -790,8 +793,8 @@ fn forwardToTty(c: u8, opts: *const options.Options) void {
     if ((ch == '\n' or ch == '\r') and opts.map_o_nl_crnl) {
         // Local echo
         if (opts.local_echo) {
-            print.printChar(printchar_mode, '\r', opts.log, opts.log_strip);
-            print.printChar(printchar_mode, '\n', opts.log, opts.log_strip);
+            printChar('\r', opts);
+            printChar('\n', opts);
         }
         ttyWrite("\r\n");
         tx_total += 2;
@@ -804,7 +807,7 @@ fn forwardToTty(c: u8, opts: *const options.Options) void {
                 handleHexPrompt(ch, opts);
             } else {
                 if (opts.input_mode != .line and opts.local_echo) {
-                    print.printChar(printchar_mode, ch, opts.log, opts.log_strip);
+                    printChar(ch, opts);
                 }
                 if (ch == 0 and opts.map_o_nulbrk) {
                     _ = std.os.linux.ioctl(device_fd, TIOCSBRK, 0);
@@ -820,7 +823,7 @@ fn forwardToTty(c: u8, opts: *const options.Options) void {
             if (opts.input_mode == .hex) {
                 handleHexPrompt(ch, opts);
             } else {
-                if (opts.local_echo) print.printChar(printchar_mode, ch, opts.log, opts.log_strip);
+                if (opts.local_echo) printChar(ch, opts);
                 ttyWrite(&[_]u8{ch});
                 tx_total += 1;
             }
@@ -830,12 +833,7 @@ fn forwardToTty(c: u8, opts: *const options.Options) void {
 
 // ── Stdin reader thread ────────────────────────────────────────────────────
 
-const StdinArg = struct {
-    opts: *options.Options,
-};
-
-fn stdinReaderThread(arg: StdinArg) void {
-    const opts = arg.opts;
+fn stdinReaderThread(_: void) void {
     var buf: [4096]u8 = undefined;
 
     while (true) {
@@ -849,37 +847,30 @@ fn stdinReaderThread(arg: StdinArg) void {
             break;
         }
 
-        if (interactive_mode) {
-            // Intercept quit key early (for xmodem abort etc.)
-            var i: usize = 0;
-            while (i < n) : (i += 1) {
-                if (xymodem.key_hit == 0xff and buf[i] != 0) {
-                    // not waiting for a key hit
-                } else if (xymodem.key_hit == 0xff) {
-                    // key hit slot empty, nothing to do
-                } else {
-                    xymodem.key_hit = buf[i];
-                    // Remove from buffer
-                    var j = i;
-                    while (j < n - 1) : (j += 1) buf[j] = buf[j + 1];
-                    continue;
-                }
-                _ = opts;
+        // Capture keys waiting for xymodem (key_hit == 0 means "waiting")
+        var out_n: usize = 0;
+        for (buf[0..n]) |b| {
+            if (interactive_mode and xymodem.key_hit == 0) {
+                xymodem.key_hit = b; // deliver to xymodem
+            } else {
+                buf[out_n] = b;
+                out_n += 1;
             }
         }
 
-        // Write to pipe for the main select loop
+        // Forward remaining bytes to the main loop via pipe
         var written: usize = 0;
-        while (written < n) {
-            const w = posix.write(pipe_fds[1], buf[written..n]) catch break;
+        while (written < out_n) {
+            const w = posix.write(pipe_fds[1], buf[written..out_n]) catch break;
             written += w;
         }
     }
 }
 
 pub fn ttyInputThreadCreate(opts: *options.Options) !void {
+    _ = opts;
     pipe_fds = try posix.pipe();
-    _ = try std.Thread.spawn(.{}, stdinReaderThread, .{StdinArg{ .opts = opts }});
+    _ = try std.Thread.spawn(.{}, stdinReaderThread, .{{}});
 }
 
 // ── Device search / wait ───────────────────────────────────────────────────
@@ -953,7 +944,7 @@ pub fn ttySearch(
 
 pub fn ttyWaitForDevice(opts: *options.Options, cfg: *configfile.Config, allocator: std.mem.Allocator) void {
     var first = true;
-    var last_errno: posix.E = .SUCCESS;
+    var last_err_name: []const u8 = "";
 
     while (true) {
         ttySearch(opts, cfg, allocator);
@@ -970,22 +961,21 @@ pub fn ttyWaitForDevice(opts: *options.Options, cfg: *configfile.Config, allocat
 
             const n = posix.poll(poll_fds[0..n_fds], timeout_ms) catch 0;
             if (n > 0 and poll_fds[0].revents & posix.POLL.IN != 0) {
-                var c: u8 = 0;
-                _ = posix.read(pipe_fds[0], std.mem.asBytes(&c)) catch {};
-                var out_c: u8 = c;
+                var ch: u8 = 0;
+                _ = posix.read(pipe_fds[0], std.mem.asBytes(&ch)) catch {};
+                var out_c: u8 = ch;
                 var fwd: bool = false;
-                var opts_mut = opts.*;
-                handleCommandSequence(c, &out_c, &fwd, &opts_mut, cfg);
+                handleCommandSequence(ch, &out_c, &fwd, opts, cfg);
             }
         }
 
         // Check device accessibility
         posix.access(device_name, posix.F_OK) catch |err| {
-            const errno = posix.errno(@intFromEnum(err));
-            if (errno != last_errno) {
-                tioPrint(opts, std.fmt.allocPrint(allocator, "Could not open {s} ({any})", .{ device_name, err }) catch "");
+            const err_name = @errorName(err);
+            if (!std.mem.eql(u8, err_name, last_err_name)) {
+                tioPrint(opts, std.fmt.allocPrint(allocator, "Could not open {s} ({s})", .{ device_name, err_name }) catch "");
                 tioPrint(opts, "Waiting for tty device..");
-                last_errno = errno;
+                last_err_name = err_name;
             }
             if (!interactive_mode) misc.delay(1000);
             continue;
@@ -999,7 +989,7 @@ pub fn ttyWaitForDevice(opts: *options.Options, cfg: *configfile.Config, allocat
 pub fn ttyDisconnect(opts: *const options.Options) void {
     if (connected) {
         tioPrint(opts, "Disconnected");
-        posix.flock(device_fd, .{ .type = .UN }) catch {};
+        posix.flock(device_fd, posix.LOCK.UN) catch {};
         posix.close(device_fd);
         device_fd = -1;
         connected = false;
@@ -1020,7 +1010,7 @@ pub fn ttyRestore(opts: *const options.Options) void {
 pub fn ttyConnect(opts: *options.Options, cfg: *configfile.Config, allocator: std.mem.Allocator) !void {
     g_opts = opts;
 
-    // Open device
+    // Open device (NONBLOCK to avoid hanging if there's no carrier)
     device_fd = try posix.open(device_name, .{ .ACCMODE = .RDWR, .NOCTTY = true, .NONBLOCK = true }, 0);
 
     // Verify it's a tty
@@ -1030,8 +1020,14 @@ pub fn ttyConnect(opts: *options.Options, cfg: *configfile.Config, allocator: st
         return error.NotATty;
     }
 
+    // Clear O_NONBLOCK now that the device is open
+    {
+        const flags = posix.fcntl(device_fd, posix.F.GETFL, 0) catch 0;
+        _ = posix.fcntl(device_fd, posix.F.SETFL, flags & ~@as(usize, std.os.linux.O.NONBLOCK)) catch {};
+    }
+
     // Exclusive lock
-    posix.flock(device_fd, .{ .type = .EX, .wait = false }) catch |err| {
+    posix.flock(device_fd, posix.LOCK.EX | posix.LOCK.NB) catch |err| {
         if (err == error.WouldBlock) {
             tioPrint(opts, "Error: Device file is locked by another process");
             posix.close(device_fd);
@@ -1041,7 +1037,7 @@ pub fn ttyConnect(opts: *options.Options, cfg: *configfile.Config, allocator: st
     };
 
     // Flush stale I/O
-    _ = std.c.tcflush(device_fd, TCIOFLUSH);
+    _ = c.tcflush(device_fd, @as(c_int, TCIOFLUSH));
 
     // Print connect status
     tioPrint(opts, try std.fmt.allocPrint(allocator, "Connected to {s}", .{device_name}));
@@ -1278,25 +1274,25 @@ pub fn listSerialDevices(opts: *const options.Options, allocator: std.mem.Alloca
 /// Translate a numeric baud rate to the corresponding POSIX speed constant.
 fn baudrateToSpeed(baud: u32) ?posix.speed_t {
     return switch (baud) {
-        0      => posix.B0,
-        50     => posix.B50,
-        75     => posix.B75,
-        110    => posix.B110,
-        134    => posix.B134,
-        150    => posix.B150,
-        200    => posix.B200,
-        300    => posix.B300,
-        600    => posix.B600,
-        1200   => posix.B1200,
-        1800   => posix.B1800,
-        2400   => posix.B2400,
-        4800   => posix.B4800,
-        9600   => posix.B9600,
-        19200  => posix.B19200,
-        38400  => posix.B38400,
-        57600  => posix.B57600,
-        115200 => posix.B115200,
-        230400 => posix.B230400,
+        0      => @intCast(c.B0),
+        50     => @intCast(c.B50),
+        75     => @intCast(c.B75),
+        110    => @intCast(c.B110),
+        134    => @intCast(c.B134),
+        150    => @intCast(c.B150),
+        200    => @intCast(c.B200),
+        300    => @intCast(c.B300),
+        600    => @intCast(c.B600),
+        1200   => @intCast(c.B1200),
+        1800   => @intCast(c.B1800),
+        2400   => @intCast(c.B2400),
+        4800   => @intCast(c.B4800),
+        9600   => @intCast(c.B9600),
+        19200  => @intCast(c.B19200),
+        38400  => @intCast(c.B38400),
+        57600  => @intCast(c.B57600),
+        115200 => @intCast(c.B115200),
+        230400 => @intCast(c.B230400),
         else   => null,
     };
 }

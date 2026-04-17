@@ -2,7 +2,6 @@
 // timestamp.zig: timestamp formatting for tio messages
 
 const std = @import("std");
-const posix = std.posix;
 
 pub const Timestamp = enum(u8) {
     none,
@@ -30,10 +29,10 @@ var state = State{};
 /// Get the current timestamp string.  The returned slice is backed by a
 /// module-level static buffer; callers must not hold it across calls.
 pub fn currentTime(ts_mode: Timestamp) ?[]const u8 {
-    // Get wall-clock time
-    const now = posix.gettimeofday() catch return null;
-    const now_sec = now.tv_sec;
-    const now_usec = now.tv_usec;
+    // Get wall-clock time via std.time (nanosecond precision)
+    const now_ns = std.time.nanoTimestamp();
+    const now_sec: i64 = @intCast(@divFloor(now_ns, std.time.ns_per_s));
+    const now_usec: i64 = @intCast(@divFloor(@mod(now_ns, std.time.ns_per_s), 1000));
 
     if (state.first) {
         state.start_sec = now_sec;
@@ -69,17 +68,17 @@ pub fn currentTime(ts_mode: Timestamp) ?[]const u8 {
         },
         .epoch, .epoch_usec => {
             // Seconds since Unix epoch
-            len = std.fmt.bufPrint(buf, "{d}", .{now_sec}) catch return null;
+            len = (std.fmt.bufPrint(buf, "{d}", .{now_sec}) catch return null).len;
         },
     }
 
     // Append milliseconds or microseconds
     if (len > 0 and len < TIME_STRING_SIZE_MAX) {
         const sub = if (ts_mode == .epoch_usec)
-            std.fmt.bufPrint(buf[len..], ".{d:0>6}", .{now_usec}) catch return null
+            (std.fmt.bufPrint(buf[len..], ".{d:0>6}", .{now_usec}) catch return null).len
         else
-            std.fmt.bufPrint(buf[len..], ".{d:0>3}", .{@divTrunc(now_usec, 1000)}) catch return null;
-        len += sub.len;
+            (std.fmt.bufPrint(buf[len..], ".{d:0>3}", .{@divTrunc(now_usec, 1000)}) catch return null).len;
+        len += sub;
     }
 
     state.prev_sec = now_sec;

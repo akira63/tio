@@ -45,10 +45,10 @@ pub fn socketConfigure(socket_str: []const u8) !void {
 
 fn bindUnix(path: [:0]const u8) !void {
     // Clean up stale socket file
-    posix.unlink(path) catch {};
+    posix.unlinkZ(path.ptr) catch {};
 
     state.sockfd = try posix.socket(posix.AF.UNIX, posix.SOCK.STREAM, 0);
-    var addr = posix.sockaddr.un{ .path = [_]u8{0} ** 108 };
+    var addr = std.mem.zeroes(posix.sockaddr.un);
     addr.family = posix.AF.UNIX;
     @memcpy(addr.path[0..path.len], path);
 
@@ -145,6 +145,7 @@ pub fn socketExit() void {
         state.sockfd = -1;
     }
     if (state.family == .unix) {
-        posix.unlink(std.mem.sliceTo(&state.unix_path, 0)) catch {};
+        const path_z: [*:0]const u8 = @ptrCast(&state.unix_path);
+        posix.unlinkZ(path_z) catch {};
     }
 }

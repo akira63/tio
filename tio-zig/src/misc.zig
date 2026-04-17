@@ -3,6 +3,11 @@
 
 const std = @import("std");
 const posix = std.posix;
+const c = @cImport({
+    @cInclude("unistd.h");
+    @cInclude("sys/wait.h");
+    @cInclude("poll.h");
+});
 
 /// Sleep for `ms` milliseconds.
 pub fn delay(ms: u64) void {
@@ -22,8 +27,8 @@ pub fn ctrlKeyCode(key: u8) i32 {
 /// DJB2 hash function for a byte slice.
 pub fn djb2Hash(str: []const u8) u64 {
     var hash: u64 = 5381;
-    for (str) |c| {
-        hash = ((hash << 5) +% hash) +% c; // hash * 33 + c
+    for (str) |ch| {
+        hash = ((hash << 5) +% hash) +% ch; // hash * 33 + c
     }
     return hash;
 }
@@ -44,12 +49,12 @@ pub fn base62Encode(num: u64, output: []u8) void {
 
 /// Return the current wall-clock time as seconds since the Unix epoch (float).
 pub fn getCurrentTime() f64 {
-    const ts = posix.clock_gettime(.REALTIME) catch return -1;
-    return @as(f64, @floatFromInt(ts.tv_sec)) + @as(f64, @floatFromInt(ts.tv_nsec)) / 1e9;
+    const now_ns = std.time.nanoTimestamp();
+    return @as(f64, @floatFromInt(now_ns)) / @as(f64, std.time.ns_per_s);
 }
 
 /// Poll `fd` for readability, then read up to `len` bytes into `data`.
-/// `timeout_ms` is the poll timeout in milliseconds (0 = wait forever, -1 = no wait).
+/// `timeout_ms` is the poll timeout in milliseconds (0 = no wait, -1 = wait forever).
 /// Returns the number of bytes read, 0 on timeout, or a negative error.
 pub fn readPoll(fd: posix.fd_t, data: []u8, timeout_ms: i32) !usize {
     var fds = [_]posix.pollfd{
@@ -104,27 +109,32 @@ fn globMatch(str: []const u8, pat: []const u8) bool {
     return pi == pat.len;
 }
 
-/// Execute a shell command with stdin/stdout redirected to `fd`.
+/// Execute a shell command with stdout/stderr redirected to `fd`.
+/// Returns the exit status or -1 on error.
 pub fn executeShellCommand(fd: posix.fd_t, command: []const u8, allocator: std.mem.Allocator) !i32 {
-    const pid = try posix.fork();
+    // Use ChildProcess with a custom pre-exec to redirect stdio
+    var cmd_z = try allocator.allocSentinel(u8, command.len, 0);
+    defer allocator.free(cmd_z);
+    @memcpy(cmd_z[0..command.len], command);
+
+    const pid = c.fork();
+    if (pid < 0) return error.ForkFailed;
     if (pid == 0) {
-        // Child process: redirect stdout and stderr to the serial device fd
-        try posix.dup2(fd, posix.STDOUT_FILENO);
-        try posix.dup2(fd, posix.STDERR_FILENO);
-        const args = [_:null]?[*:0]const u8{
-            "/bin/sh",
-            "-c",
-            try allocator.dupeZ(u8, command),
-            null,
-        };
+        // Child: redirect stdout and stderr to fd
+        _ = c.dup2(fd, c.STDOUT_FILENO);
+        _ = c.dup2(fd, c.STDERR_FILENO);
+        _ = c.dup2(fd, c.STDIN_FILENO);
+        const argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", cmd_z.ptr, null };
         const envp = [_:null]?[*:0]const u8{null};
-        posix.execveZ("/bin/sh", &args, &envp) catch {};
-        posix.exit(127);
+        _ = c.execve("/bin/sh", @ptrCast(&argv), @ptrCast(&envp));
+        _ = c._exit(127);
+        unreachable;
     }
     // Parent: wait for child
-    const result = posix.waitpid(pid, 0);
-    if (posix.W.IFEXITED(result.status)) {
-        return @intCast(posix.W.EXITSTATUS(result.status));
+    var wstatus: c_int = 0;
+    _ = c.waitpid(pid, &wstatus, 0);
+    if (c.WIFEXITED(wstatus)) {
+        return @intCast(c.WEXITSTATUS(wstatus));
     }
     return -1;
 }

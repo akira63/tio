@@ -4,6 +4,10 @@
 const std = @import("std");
 const posix = std.posix;
 const builtin = @import("builtin");
+const c = @cImport({
+    @cInclude("termios.h");
+    @cInclude("sys/ioctl.h");
+});
 
 // Linux TCGETS2/TCSETS2 ioctl numbers (from asm-generic/ioctls.h)
 const TCGETS2: u32 = 0x802C542A;
@@ -22,16 +26,16 @@ const Termios2 = extern struct {
     c_ospeed: u32,
 };
 
-// macOS IOSSIOSPEED ioctl
+// macOS IOSSIOSPEED ioctl number
 const IOSSIOSPEED: u32 = 0x80045402;
 
 /// Set an arbitrary baud rate on `fd`.  This is called only when the
 /// requested baud rate is not a standard POSIX speed constant.
 pub fn setSpeed(fd: posix.fd_t, baudrate: u32) !void {
     if (builtin.os.tag == .linux) {
-        try setSpeedLinux(fd, baudrate);
+        return setSpeedLinux(fd, baudrate);
     } else if (builtin.os.tag == .macos) {
-        try setSpeedMacos(fd, baudrate);
+        return setSpeedMacos(fd, baudrate);
     } else {
         return error.Unsupported;
     }
@@ -52,8 +56,9 @@ fn setSpeedLinux(fd: posix.fd_t, baudrate: u32) !void {
 }
 
 fn setSpeedMacos(fd: posix.fd_t, baudrate: u32) !void {
-    const speed: c_long = baudrate;
-    const rc = std.os.darwin.ioctl(fd, IOSSIOSPEED, @intFromPtr(&speed));
+    // Use @cImport for the macOS ioctl since std.os.darwin is not available
+    const speed: c_long = @intCast(baudrate);
+    const rc = c.ioctl(fd, @as(c_ulong, IOSSIOSPEED), &speed);
     if (rc != 0) return error.IoctlFailed;
 }
 
